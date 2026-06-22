@@ -4,31 +4,27 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
 
-# Core tracking logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="OSIRIS Backend Core")
+app = FastAPI(title="OSIRIS Chatbot Gateway")
 
 OPENROUTER_API_KEY = os.getenv("OpenRouter")
 
-# Simplified Text Schema
 class ChatRequest(BaseModel):
     message: str
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "engine": "OSIRIS Text Chatbot Core"}
+    return {"status": "online", "engine": "OSIRIS Text Gateway"}
 
 @app.post("/api/v1/council/chat")
 async def chat_endpoint(payload: ChatRequest):
     if not OPENROUTER_API_KEY:
-        logger.error("Missing OpenRouter credentials configuration setup.")
-        raise HTTPException(status_code=500, detail="Server upstream configuration missing.")
+        logger.error("OpenRouter variable missing in Railway configuration.")
+        raise HTTPException(status_code=500, detail="Server configuration missing.")
         
     try:
-        logger.info(f"Received message payload: {payload.message[:50]}")
-        
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
@@ -37,7 +33,7 @@ async def chat_endpoint(payload: ChatRequest):
         openrouter_payload = {
             "model": "google/gemini-2.5-flash",
             "messages": [
-                {"role": "system", "content": "You are the OSIRIS AI agent. Respond directly and clearly to the user's inquiry."},
+                {"role": "system", "content": "You are the OSIRIS AI agent. Respond directly and clearly."},
                 {"role": "user", "content": payload.message}
             ]
         }
@@ -50,19 +46,16 @@ async def chat_endpoint(payload: ChatRequest):
         )
         
         if response.status_code != 200:
-            logger.error(f"OpenRouter error: {response.text}")
-            raise HTTPException(status_code=response.status_code, detail="AI upstream routing failure.")
+            raise HTTPException(status_code=response.status_code, detail="AI gateway connection dropped.")
             
         ai_response = response.json()['choices'][0]['message']['content']
         return {"status": "success", "response": ai_response}
         
     except Exception as e:
-        logger.error(f"Pipeline dropped safely: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal processing fault.")
+        logger.error(f"Error processing chat routing: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal routing fault.")
 
 if __name__ == "__main__":
     import uvicorn
-    # Enforce Railway runtime variable mapping
     target_port = int(os.getenv("PORT", 8080))
-    logger.info(f"Binding Core Application layer onto port: {target_port}")
     uvicorn.run(app, host="0.0.0.0", port=target_port)
