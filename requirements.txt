@@ -3,3 +3,4 @@ uvicorn
 pypdf
 openai
 requests
+psycopg2-binary
