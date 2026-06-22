@@ -5,45 +5,36 @@ import io
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-import psycopg2
 from pypdf import PdfReader
 
+# Setup core service logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OSIRIS Backend Core")
 
+# Resolve variables directly from the target infrastructure profile
 OPENROUTER_API_KEY = os.getenv("OpenRouter")
-DATABASE_URL = os.getenv("DATABASE_URL")
 
 class ProcessRequest(BaseModel):
     file_name: str
     file_data: str
     prompt: str
 
-def verify_db():
-    if not DATABASE_URL:
-        return False
-    try:
-        # Open and immediately close to avoid thread starvation
-        conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
-        conn.close()
-        return True
-    except Exception as e:
-        logger.error(f"Database handshake skipped or timed out: {e}")
-        return False
-
-@app.on_event("startup")
-def startup_db_check():
-    verify_db()
+@app.get("/")
+def health_check():
+    return {"status": "online", "service": "OSIRIS Core Pipeline"}
 
 @app.post("/api/v1/council/convocate")
 async def process_document(payload: ProcessRequest):
     if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenRouter API key missing.")
+        logger.error("Missing OpenRouter credentials configuration setup.")
+        raise HTTPException(status_code=500, detail="Server upstream configuration missing.")
         
     try:
-        logger.info(f"Processing payload stream for: {payload.file_name}")
+        logger.info(f"Processing structural extraction stream for: {payload.file_name}")
+        
+        # Safe stream decoding handling
         pdf_bytes = base64.b64decode(payload.file_data)
         
         extracted_text = ""
@@ -56,7 +47,7 @@ async def process_document(payload: ProcessRequest):
                     extracted_text += text + "\n"
 
         if not extracted_text.strip():
-            extracted_text = "[No text content found inside target file layout]"
+            extracted_text = "[Raw structural layouts parsing failure]"
             
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -66,8 +57,8 @@ async def process_document(payload: ProcessRequest):
         openrouter_payload = {
             "model": "google/gemini-2.5-flash",
             "messages": [
-                {"role": "system", "content": "You are the OSIRIS AI core. Process the context strictly."},
-                {"role": "user", "content": f"Context:\n{extracted_text[:4000]}\n\nInstruction: {payload.prompt}"}
+                {"role": "system", "content": "You are the OSIRIS AI engine. Process the context safely."},
+                {"role": "user", "content": f"Context:\n{extracted_text[:3000]}\n\nInstruction: {payload.prompt}"}
             ]
         }
         
@@ -79,16 +70,19 @@ async def process_document(payload: ProcessRequest):
         )
         
         if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Upstream completion failure.")
+            logger.error(f"Upstream provider response error: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail="Gateway processing timeout.")
             
         ai_response = response.json()['choices'][0]['message']['content']
         return {"status": "success", "response": ai_response}
         
     except Exception as e:
-        logger.error(f"Request dropped safely: {str(e)}")
-        raise HTTPException(status_code=500, detail="Server pipeline execution break.")
+        logger.error(f"Data stream processing dropped cleanly: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal processing sequence fault.")
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Enforce exact variable mapping for Railway's runtime proxy layer
+    target_port = int(os.getenv("PORT", 8080))
+    logger.info(f"Binding Core Application layer securely onto dynamic port assignment: {target_port}")
+    uvicorn.run(app, host="0.0.0.0", port=target_port)
