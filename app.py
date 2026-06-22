@@ -33,7 +33,7 @@ if st.button("Review the attached file"):
                     "prompt": user_prompt
                 }
                 
-                response = requests.post(f"{BACKEND_URL}/process", json=payload)
+                response = requests.post(f"{BACKEND_URL}/api/v1/council/convocate", json=payload)
                 
                 if response.status_code == 200:
                     data = response.json()
