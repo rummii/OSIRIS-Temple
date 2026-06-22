@@ -98,3 +98,9 @@ async def process_document(payload: ProcessRequest):
     except Exception as e:
         logger.error(f"Pipeline processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    # Pull the exact port assigned by Railway, fallback safely to 8080 if local
+    port = int(os.getenv("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
