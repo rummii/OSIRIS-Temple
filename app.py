@@ -13,7 +13,7 @@ st.markdown("""
     .main { background-color: #0e1117; color: #ffffff; }
     .stTextInput>div>div>input { background-color: #262730; color: white; }
     </style>
-    """, unsafe_with_html=True)
+    """, unsafe_allow_html=True)
 
 st.title("🏛️ OSIRIS Council Chambers")
 st.subheader("Document Processing & Analysis Pipeline")
