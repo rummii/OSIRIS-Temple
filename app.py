@@ -2,10 +2,18 @@ import streamlit as st
 import requests
 import base64
 
-# Connect directly to your healthy backend engine
+# Configuration
 BACKEND_URL = "https://osiris-temple-production.up.railway.app"
 
 st.set_page_config(page_title="OSIRIS Council Chambers", layout="wide")
+
+# Custom Dark Theme Styling matching your layout
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; color: #ffffff; }
+    .stTextInput>div>div>input { background-color: #262730; color: white; }
+    </style>
+    """, unsafe_with_html=True)
 
 st.title("🏛️ OSIRIS Council Chambers")
 st.subheader("Document Processing & Analysis Pipeline")
@@ -22,18 +30,20 @@ if st.button("Review the attached file"):
     else:
         with st.spinner("Processing document through the OSIRIS pipeline..."):
             try:
-                # Read file bytes and encode to base64 safely
+                # Read file bytes and encode to base64
                 file_bytes = uploaded_file.read()
                 base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
                 
-                # Format payload payload cleanly for the backend engine
+                # Format payload
                 payload = {
                     "file_name": uploaded_file.name,
                     "file_data": base64_pdf,
                     "prompt": user_prompt
                 }
                 
-                response = requests.post(f"{BACKEND_URL}/api/v1/council/convocate", json=payload)
+                # Explicitly hitting the versioned API route structure
+                target_url = f"{BACKEND_URL}/api/v1/council/convocate"
+                response = requests.post(target_url, json=payload)
                 
                 if response.status_code == 200:
                     data = response.json()

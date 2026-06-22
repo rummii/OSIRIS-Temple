@@ -1,120 +1,94 @@
-from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
-from typing import Optional
 import os
+import logging
+import base64
+import io
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from pypdf import PdfReader
 
-app = FastAPI(title="OSIRIS Temple Production Core")
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Grab the connection URL dynamically (Fall back to empty string if not set yet)
-DATABASE_URL = os.getenv("DATABASE_URL", "YOUR_PASTED_DATABASE_URL_HERE")
+app = FastAPI(title="OSIRIS Backend Core")
 
-class CouncilQuery(BaseModel):
-    user_id: str
-    user_prompt: str
-    image_b64: Optional[str] = None
-    extracted_text: Optional[str] = None
+# Environment Variable Resolution
+OPENROUTER_API_KEY = os.getenv("OpenRouter")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-def get_db_connection():
+# Request Schema
+class ProcessRequest(BaseModel):
+    file_name: str
+    file_data: str  # Base64 encoded PDF string
+    prompt: str
+
+@app.on_event("startup")
+def startup_db_check():
+    if not DATABASE_URL:
+        logger.error("DATABASE_URL environment variable is missing!")
+        return
     try:
-        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.close()
+        logger.info("Database connection verified successfully on startup.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database Connection Failure: {str(e)}")
-
-@app.get("/")
-def read_root():
-    return {"status": "online", "system": "OSIRIS Temple Gateway"}
+        logger.error(f"Database connection failed on startup: {str(e)}")
 
 @app.post("/api/v1/council/convocate")
-async def convocate_council(payload: CouncilQuery, authorization: Optional[str] = Header(None)):
-    # 1. Connect to our newly created tables
-    conn = get_db_connection()
-    cur = conn.cursor()
-    
-    # 2. Check Credit Wallet balance
-    cur.execute("SELECT credits_remaining FROM user_profiles WHERE user_id = %s;", (payload.user_id,))
-    user_row = cur.fetchone()
-    
-    if not user_row:
-        # Auto-provision a free tier profile entry if they don't exist yet for testing
-        cur.execute(
-            "INSERT INTO user_profiles (user_id, credits_remaining) VALUES (%s, 1000) RETURNING credits_remaining;", 
-            (payload.user_id,)
-        )
-        conn.commit()
-        credits_available = 1000
-    else:
-        credits_available = user_row["credits_remaining"]
+async def process_document(payload: ProcessRequest):
+    if not OPENROUTER_API_KEY:
+        raise HTTPException(status_code=500, detail="OpenRouter API configuration missing on server.")
         
-    if credits_available <= 0:
-        cur.close()
-        conn.close()
-        raise HTTPException(status_code=402, detail="Insufficient credits in OSIRIS account balance.")
-
-    # 3. Dynamic Brain Ingestion (Pull prompts directly from our live training database rows)
-    cur.execute("SELECT role_id, system_instruction FROM osiris_agent_roles WHERE is_active = TRUE;")
-    roles_rows = cur.fetchall()
-    
-    instructions = {row['role_id']: row['system_instruction'] for row in roles_rows}
-    architect_sys = instructions.get('architect', 'You are The Architect.')
-    engineer_sys = instructions.get('engineer', 'You are The Engineer.')
-    critic_sys = instructions.get('critic', 'You are The Critic.')
-
-    # 4. Formulate the composite prompt layout
-    combined_prompt = payload.user_prompt
-    if payload.extracted_text:
-        combined_prompt = f"--- ATTACHED DOCUMENT CONTEXT ---\n{payload.extracted_text}\n---------------------------------\n\nUser Question: {payload.user_prompt}"
-    
-    content_blocks = [{"type": "text", "text": combined_prompt}]
-    
-    # 5. Connect to the OpenRouter pipeline
-    OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY", "YOUR_OPENROUTER_KEY_HERE")
-    url = "https://openrouter.ai/api/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENROUTER_KEY}", "Content-Type": "application/json"}
-
-    def call_engine(model_string, system_role, user_content):
-        body = {
-            "model": model_string,
+    try:
+        logger.info(f"Processing file: {payload.file_name}")
+        
+        # Decode PDF content from base64 string
+        pdf_bytes = base64.b64decode(payload.file_data)
+        
+        # Extract text safely from incoming file payload
+        pdf_file = io.BytesIO(pdf_bytes)
+        reader = PdfReader(pdf_file)
+        extracted_text = ""
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                extracted_text += text + "\n"
+        
+        if not extracted_text.strip():
+            extracted_text = "[No legible text content extracted from the document layout]"
+            
+        logger.info("Sending request to OpenRouter...")
+        
+        headers = {
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        openrouter_payload = {
+            "model": "meta-llama/llama-3.3-70b-instruct:free",
             "messages": [
-                {"role": "system", "content": system_role},
-                {"role": "user", "content": user_content}
+                {"role": "system", "content": "You are the OSIRIS AI engine. Analyze the context and follow instructions precisely."},
+                {"role": "user", "content": f"Context data:\n{extracted_text}\n\nInstruction: {payload.prompt}"}
             ]
         }
-        try:
-            res = requests.post(url, headers=headers, json=body, timeout=30)
-            if res.status_code == 200:
-                return res.json()['choices'][0]['message']['content'].strip()
-            return f"API Error ({res.status_code}): {res.text}"
-        except Exception as e:
-            return f"Pipeline connection failed: {str(e)}"
-
-    # Fire concurrent endpoints
-    arch_res = call_engine("google/gemini-2.5-flash", architect_sys, content_blocks)
-    
-    eng_content = content_blocks.copy()
-    if payload.image_b64:
-        eng_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{payload.image_b64}"}})
-    eng_res = call_engine("openai/gpt-4o", engineer_sys, eng_content)
-    
-    crit_res = call_engine("deepseek/deepseek-chat", critic_sys, content_blocks)
-
-    # 6. Deduct credit metric charge upon calculation completion (Standard deduction baseline = 10 credits)
-    cost_deduction = 10
-    cur.execute(
-        "UPDATE user_profiles SET credits_remaining = credits_remaining - %s WHERE user_id = %s RETURNING credits_remaining;",
-        (cost_deduction, payload.user_id)
-    )
-    updated_row = cur.fetchone()
-    conn.commit()
-    
-    cur.close()
-    conn.close()
-
-    return {
-        "architect": arch_res,
-        "engineer": eng_res,
-        "critic": crit_res,
-        "credits_remaining": updated_row["credits_remaining"] if updated_row else 0
-    }
+        
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=openrouter_payload
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"OpenRouter Error: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail=f"OpenRouter upstream failure: {response.text}")
+            
+        result_json = response.json()
+        ai_response = result_json['choices'][0]['message']['content']
+        
+        return {"status": "success", "response": ai_response}
+        
+    except Exception as e:
+        logger.error(f"Pipeline processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
