@@ -8,99 +8,87 @@ import requests
 import psycopg2
 from pypdf import PdfReader
 
-# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OSIRIS Backend Core")
 
-# Environment Variable Resolution
 OPENROUTER_API_KEY = os.getenv("OpenRouter")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Request Schema
 class ProcessRequest(BaseModel):
     file_name: str
-    file_data: str  # Base64 encoded PDF string
+    file_data: str
     prompt: str
+
+def verify_db():
+    if not DATABASE_URL:
+        return False
+    try:
+        # Open and immediately close to avoid thread starvation
+        conn = psycopg2.connect(DATABASE_URL, connect_timeout=3)
+        conn.close()
+        return True
+    except Exception as e:
+        logger.error(f"Database handshake skipped or timed out: {e}")
+        return False
 
 @app.on_event("startup")
 def startup_db_check():
-    if not DATABASE_URL:
-        logger.error("DATABASE_URL environment variable is missing!")
-        return
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.close()
-        logger.info("Database connection verified successfully on startup.")
-    except Exception as e:
-        logger.error(f"Database connection failed on startup: {str(e)}")
+    verify_db()
 
 @app.post("/api/v1/council/convocate")
 async def process_document(payload: ProcessRequest):
     if not OPENROUTER_API_KEY:
-        raise HTTPException(status_code=500, detail="OpenRouter API configuration missing on server.")
+        raise HTTPException(status_code=500, detail="OpenRouter API key missing.")
         
     try:
-        logger.info(f"Processing file: {payload.file_name}")
-        
-        # Decode PDF content from base64 string
+        logger.info(f"Processing payload stream for: {payload.file_name}")
         pdf_bytes = base64.b64decode(payload.file_data)
         
-        # Extract text safely from incoming file payload
-        pdf_file = io.BytesIO(pdf_bytes)
-        reader = PdfReader(pdf_file)
         extracted_text = ""
-        for page in reader.pages:
-            text = page.extract_text()
-            if text:
-                extracted_text += text + "\n"
-        
+        with io.BytesIO(pdf_bytes) as pdf_file:
+            reader = PdfReader(pdf_file)
+            max_pages = min(len(reader.pages), 5)
+            for i in range(max_pages):
+                text = reader.pages[i].extract_text()
+                if text:
+                    extracted_text += text + "\n"
+
         if not extracted_text.strip():
-            extracted_text = "[No legible text content extracted from the document layout]"
+            extracted_text = "[No text content found inside target file layout]"
             
-        logger.info("Sending request to OpenRouter...")
-        
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
         }
         
-        # Using an ultra-fast, high-context free tier model to bypass processing bottlenecks
         openrouter_payload = {
             "model": "google/gemini-2.5-flash",
             "messages": [
-                {"role": "system", "content": "You are the OSIRIS AI engine. Analyze the context and follow instructions precisely."},
-                {"role": "user", "content": f"Context data:\n{extracted_text}\n\nInstruction: {payload.prompt}"}
+                {"role": "system", "content": "You are the OSIRIS AI core. Process the context strictly."},
+                {"role": "user", "content": f"Context:\n{extracted_text[:4000]}\n\nInstruction: {payload.prompt}"}
             ]
         }
         
-        # Explicit timeout parameter added to prevent proxy hang updates
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=openrouter_payload,
-            timeout=25.0
+            timeout=15.0
         )
         
         if response.status_code != 200:
-            logger.error(f"OpenRouter Error: {response.text}")
-            raise HTTPException(status_code=response.status_code, detail=f"OpenRouter upstream failure: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail="Upstream completion failure.")
             
-        result_json = response.json()
-        ai_response = result_json['choices'][0]['message']['content']
-        
+        ai_response = response.json()['choices'][0]['message']['content']
         return {"status": "success", "response": ai_response}
         
-    except requests.exceptions.Timeout:
-        logger.error("Upstream OpenRouter connection timed out.")
-        raise HTTPException(status_code=504, detail="Upstream AI engine timed out during analysis processing.")
     except Exception as e:
-        logger.error(f"Pipeline processing failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Request dropped safely: {str(e)}")
+        raise HTTPException(status_code=500, detail="Server pipeline execution break.")
 
 if __name__ == "__main__":
     import uvicorn
-    # Pull the exact port assigned by Railway, fallback safely to 8080 if local
     port = int(os.getenv("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
