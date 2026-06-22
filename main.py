@@ -66,18 +66,21 @@ async def process_document(payload: ProcessRequest):
             "Content-Type": "application/json"
         }
         
+        # Using an ultra-fast, high-context free tier model to bypass processing bottlenecks
         openrouter_payload = {
-            "model": "meta-llama/llama-3.3-70b-instruct:free",
+            "model": "google/gemini-2.5-flash",
             "messages": [
                 {"role": "system", "content": "You are the OSIRIS AI engine. Analyze the context and follow instructions precisely."},
                 {"role": "user", "content": f"Context data:\n{extracted_text}\n\nInstruction: {payload.prompt}"}
             ]
         }
         
+        # Explicit timeout parameter added to prevent proxy hang updates
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
-            json=openrouter_payload
+            json=openrouter_payload,
+            timeout=25.0
         )
         
         if response.status_code != 200:
@@ -89,6 +92,9 @@ async def process_document(payload: ProcessRequest):
         
         return {"status": "success", "response": ai_response}
         
+    except requests.exceptions.Timeout:
+        logger.error("Upstream OpenRouter connection timed out.")
+        raise HTTPException(status_code=504, detail="Upstream AI engine timed out during analysis processing.")
     except Exception as e:
         logger.error(f"Pipeline processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
