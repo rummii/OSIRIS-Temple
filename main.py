@@ -1,54 +1,34 @@
 import os
 import logging
-import base64
-import io
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-from pypdf import PdfReader
 
-# Setup core service logging
+# Core tracking logs
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="OSIRIS Backend Core")
 
-# Resolve variables directly from the target infrastructure profile
 OPENROUTER_API_KEY = os.getenv("OpenRouter")
 
-class ProcessRequest(BaseModel):
-    file_name: str
-    file_data: str
-    prompt: str
+# Simplified Text Schema
+class ChatRequest(BaseModel):
+    message: str
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "service": "OSIRIS Core Pipeline"}
+    return {"status": "online", "engine": "OSIRIS Text Chatbot Core"}
 
-@app.post("/api/v1/council/convocate")
-async def process_document(payload: ProcessRequest):
+@app.post("/api/v1/council/chat")
+async def chat_endpoint(payload: ChatRequest):
     if not OPENROUTER_API_KEY:
         logger.error("Missing OpenRouter credentials configuration setup.")
         raise HTTPException(status_code=500, detail="Server upstream configuration missing.")
         
     try:
-        logger.info(f"Processing structural extraction stream for: {payload.file_name}")
+        logger.info(f"Received message payload: {payload.message[:50]}")
         
-        # Safe stream decoding handling
-        pdf_bytes = base64.b64decode(payload.file_data)
-        
-        extracted_text = ""
-        with io.BytesIO(pdf_bytes) as pdf_file:
-            reader = PdfReader(pdf_file)
-            max_pages = min(len(reader.pages), 5)
-            for i in range(max_pages):
-                text = reader.pages[i].extract_text()
-                if text:
-                    extracted_text += text + "\n"
-
-        if not extracted_text.strip():
-            extracted_text = "[Raw structural layouts parsing failure]"
-            
         headers = {
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "Content-Type": "application/json"
@@ -57,8 +37,8 @@ async def process_document(payload: ProcessRequest):
         openrouter_payload = {
             "model": "google/gemini-2.5-flash",
             "messages": [
-                {"role": "system", "content": "You are the OSIRIS AI engine. Process the context safely."},
-                {"role": "user", "content": f"Context:\n{extracted_text[:3000]}\n\nInstruction: {payload.prompt}"}
+                {"role": "system", "content": "You are the OSIRIS AI agent. Respond directly and clearly to the user's inquiry."},
+                {"role": "user", "content": payload.message}
             ]
         }
         
@@ -70,19 +50,19 @@ async def process_document(payload: ProcessRequest):
         )
         
         if response.status_code != 200:
-            logger.error(f"Upstream provider response error: {response.text}")
-            raise HTTPException(status_code=response.status_code, detail="Gateway processing timeout.")
+            logger.error(f"OpenRouter error: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail="AI upstream routing failure.")
             
         ai_response = response.json()['choices'][0]['message']['content']
         return {"status": "success", "response": ai_response}
         
     except Exception as e:
-        logger.error(f"Data stream processing dropped cleanly: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal processing sequence fault.")
+        logger.error(f"Pipeline dropped safely: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal processing fault.")
 
 if __name__ == "__main__":
     import uvicorn
-    # Enforce exact variable mapping for Railway's runtime proxy layer
+    # Enforce Railway runtime variable mapping
     target_port = int(os.getenv("PORT", 8080))
-    logger.info(f"Binding Core Application layer securely onto dynamic port assignment: {target_port}")
+    logger.info(f"Binding Core Application layer onto port: {target_port}")
     uvicorn.run(app, host="0.0.0.0", port=target_port)

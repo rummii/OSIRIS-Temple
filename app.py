@@ -1,6 +1,5 @@
 import streamlit as st
 import requests
-import base64
 
 # Configuration
 BACKEND_URL = "https://osiris-temple-production.up.railway.app"
@@ -16,41 +15,31 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("🏛️ OSIRIS Council Chambers")
-st.subheader("Document Processing & Analysis Pipeline")
+st.subheader("Text-Only Chatbot Agent Baseline")
 
-# File Upload Processing
-uploaded_file = st.file_uploader("Upload a PDF document for analysis", type=["pdf"])
-user_prompt = st.text_input("Enter instructions for the council", placeholder="Summarize this document...")
+# Simplified chat layout input
+user_message = st.text_input("Message the Council:", placeholder="Type your inquiry here...")
 
-if st.button("Review the attached file"):
-    if not uploaded_file:
-        st.warning("Please attach a document first.")
-    elif not user_prompt:
-        st.warning("Please provide an instruction prompt.")
+if st.button("Send Message"):
+    if not user_message:
+        st.warning("Please enter a message first.")
     else:
-        with st.spinner("Processing document through the OSIRIS pipeline..."):
+        with st.spinner("Convocating with the OSIRIS core..."):
             try:
-                # Read file bytes and encode to base64
-                file_bytes = uploaded_file.read()
-                base64_pdf = base64.b64encode(file_bytes).decode('utf-8')
-                
-                # Format payload
+                # Lightweight payload structure without binary files
                 payload = {
-                    "file_name": uploaded_file.name,
-                    "file_data": base64_pdf,
-                    "prompt": user_prompt
+                    "message": user_message
                 }
                 
-                # Explicitly hitting the versioned API route structure
-                target_url = f"{BACKEND_URL}/api/v1/council/convocate"
+                target_url = f"{BACKEND_URL}/api/v1/council/chat"
                 response = requests.post(target_url, json=payload)
                 
                 if response.status_code == 200:
                     data = response.json()
-                    st.success("Analysis Complete!")
-                    st.write(data.get("response", "No response content returned."))
+                    st.success("Response Received:")
+                    st.write(data.get("response", "No content returned."))
                 else:
-                    st.error(f"Backend Server Processing Error ({response.status_code}): {response.text}")
+                    st.error(f"Backend Server Error ({response.status_code}): {response.text}")
                     
             except Exception as e:
                 st.error(f"Failed to connect to the backend node: {str(e)}")
